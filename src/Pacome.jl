@@ -1,5 +1,5 @@
 module Pacome
-# ceci est un test 
+
 using EasyFITS
 using InterpolationKernels
 using TwoDimensional
@@ -27,7 +27,7 @@ using Utils: guess_paco_hduname, fix_paco_image!, central_pixel,
              split_on_threads
 
 struct PacomeData{T<:AbstractFloat,N}
-    dates::Vector{String}           # Date of observation (in ISO 8601 standard)
+    dates::Vector{String}     # Date of observation (in ISO 8601 standard)
     epochs::Vector{T}         # Date of observation (in Julian years)
     pixres::Vector{T}         # Pixel resolution at each epoch
     centers::Vector{Point{T}} # Image center in index units at each epoch
@@ -40,11 +40,17 @@ end
 Base.length(A::PacomeData) = length(A.epochs)
 
 """
-    PacomeData{T,N}(pat, outliers=nothing) -> dat
+    PacomeData{T,N}(pat, outliers=nothing; mode, asdi_apriori, asdi_masked, asdi_BB) -> dat
 
 loads all the numerator and denominator maps produced by PACO reduction and
 stored in FITS files found in directories matching glob-style pattern `pat`.
 Optional argument `outliers` is to specify a list of directories to omit.
+
+Keyword argument `mode` specified whether the data was reduced in `"adi"` or in
+`"asdi"` mode. The ASDI PACO prior index is given in `asdi_apriori`. `asdi_masked`
+is a boolean specifying if the masked ASDI data should be considered (see PACO).
+Finally, `asdi_BB` is to include (or not) broad band ADI observations along with
+the other ASDI observations.
 
 Parameter `T` is the floating-point type of the data; if omitted,
 `T=Float32` is assumed.
@@ -294,7 +300,7 @@ applies a mask in PACOME's b terms contained in data `dat` to hide the sources
 whose projected positions on the detector are given by the orbit `orb`. The
 parameter `orb` can be a single orbit or a collection of orbits.
 Keyword argument `rad` is the radius of the mask, it is set to `rad=10` by
-default and `val` is the  numerical value used to mask the sources, default is
+default and `val` is the numerical value used to mask the sources, default is
 `val=0`.
 
 """
@@ -306,7 +312,6 @@ function mask_sources!(dat::PacomeData{T,3},
     nt = length(dat)
     nx, ny, nλ = dat.dims
 
-    # [[Point(i,j) for j in 1:nx] for i in 1:ny]
     coord_x = ones(Int, nx)' .* (1:nx)
     coord_y = (1:ny)' .* ones(Int, ny)
 
@@ -324,7 +329,7 @@ function mask_sources!(dat::PacomeData{T,3},
 end
 
 function mask_sources!(dat::PacomeData{T,3},
-                       orbs::Array{Orbit{T},1};
+                       orbs::Vector{Orbit{T}};
                        kwds...) where {T<:AbstractFloat}
 
    for orb in orbs
@@ -335,10 +340,10 @@ end
 """
     mask_centers!(dat, orb; rad, val) -> nothing
 
-applies a mask in PACOME's b terms contained in data `dat` at the center.
-The size of the mask for each epoch is directly adapted to the size of the
-coranagraphic mask. Keyword argument `val` is the  numerical value used to mask
-the sources, default is `val=0`.
+applies a mask in PACOME's b terms contained in data `dat` at the center of the
+images. The size of the mask for each epoch is directly adapted to the size of
+the coranagraphic mask. Keyword argument `val` is the  numerical value used to
+mask the sources, default is `val=0`.
 
 """
 function mask_centers!(dat::PacomeData{T,3}; kwds...) where {T<:AbstractFloat}
@@ -829,27 +834,6 @@ function interpolate(dat::PacomeData{T,3},
     return a, b
 end
 
-# function interpolate(dat::PacomeData{T,3},
-#                      orb::Orbit{T},
-#                      ker::Kernel{T},
-#                      t::Int;
-#                      kwds...) where {T<:AbstractFloat}
-#
-#    @assert 1 ≤ t ≤ length(dat)
-#    ΔRA, ΔDec = projected_position(orb, dat.epochs[t]; kwds...)
-#    pt = dat.centers[t] + Point(-ΔRA, ΔDec)/dat.pixres[t]
-#    return interpolate(dat.a[t], ker, pt), interpolate(dat.b[t], ker, pt)
-# end
-#
-# function interpolate(dat::PacomeData{T,3},
-#                      x::Vector{T},
-#                      ker::Kernel{T,4},
-#                      t::Int;
-#                      kwds...) where {T<:AbstractFloat}
-#    @assert length(x)==7
-#    return interpolate(dat, arr2orb(x), ker, t; kwds...)
-# end
-
 function interpolate(A::AbstractArray{T,2},
                      ker::BSpline{1,T},
                      pt::Point{T}) where {T<:AbstractFloat}
@@ -922,43 +906,6 @@ to the orbital paremeters of `orb`. The derivatives are computed with numerical
 finite differences.
 
 """
-
-# function interpolate_ab_derivs_wrt_orb(dat::PacomeData{T,3},
-#                                        orb::Orbit{T},
-#                                        ker::Kernel{T,4};
-#                                        kwds...) where {T<:AbstractFloat}
-#     @assert length(dat) > 0
-#     @assert !Base.has_offset_axes(dat.a[1], dat.b[1])
-#     nx, ny, nλ, nt = size(dat.a[1])..., last(length(dat.a))
-#     orb_arr = orb2arr(orb)
-#     ∂a_∂μ = fill!(Array{T,3}(undef, (7, nλ, nt)),0)
-#     ∂b_∂μ = fill!(Array{T,3}(undef, (7, nλ, nt)),0)
-#
-#     # Retrieves the derivatives of the inteprolated values of a and b at
-#     # the 2-D projected positions
-#     res = interpolate_with_derivatives(dat, orb, ker)
-#     a = res[1][1,:,:]
-#     b = res[2][1,:,:]
-#     ∂a_∂θ = res[1][2:end,:,:]
-#     ∂b_∂θ = res[2][2:end,:,:]
-#
-#     for t in 1:nt
-#         # Retrieves the derivatives of the position with resp. to the orbital
-#         # elem. and converts their units to match those of ∂a_∂θ and ∂b_∂θ
-#         _, ∂θ_∂μ = projected_position_derivs(orb, dat.epochs[t])
-#         ∂θ_∂μ[:,:] = ∂θ_∂μ[:,:]/dat.pixres[t] # positions in pixels
-#         ∂θ_∂μ[:,3] = ∂θ_∂μ[:,3]/rad2deg(1) # inclination in deg
-#         ∂θ_∂μ[:,5] = ∂θ_∂μ[:,5]/rad2deg(1) # arg. of periapsis in deg
-#         ∂θ_∂μ[:,6] = ∂θ_∂μ[:,6]/rad2deg(1) # long. ascending node in deg
-#         ∂θ_∂μ[1,:] = -∂θ_∂μ[1,:] # -ΔRA in the x direction
-#         for λ in 1:nλ
-#             ∂a_∂μ[:,λ,t] = (∂a_∂θ[:,λ,t]' * ∂θ_∂μ)'
-#             ∂b_∂μ[:,λ,t] = (∂b_∂θ[:,λ,t]' * ∂θ_∂μ)'
-#         end
-#     end
-#
-#     return a, b, ∂a_∂μ, ∂b_∂μ
-# end
 
 function interpolate_ab_derivs_wrt_orb(dat::PacomeData{T,3},
                                        orb::Orbit{T},
@@ -1169,43 +1116,6 @@ and `wgt2`.
     i1, i2, i3, i4 = off1 + 1, off1 + 2, off1 + 3, off1 + 4
     j1, j2, j3, j4 = off2 + 1, off2 + 2, off2 + 3, off2 + 4
 
-    # println("A[i1,j1] = $(A[i1,j1,k])")
-    # println("A[i2,j1] = $(A[i2,j1,k])")
-    # println("A[i3,j1] = $(A[i3,j1,k])")
-    # println("A[i4,j1] = $(A[i4,j1,k])")
-    #
-    # println("A[i1,j2] = $(A[i1,j2,k])")
-    # println("A[i2,j2] = $(A[i2,j2,k])")
-    # println("A[i3,j2] = $(A[i3,j2,k])")
-    # println("A[i4,j2] = $(A[i4,j2,k])")
-    #
-    # println("A[i1,j3] = $(A[i1,j3,k])")
-    # println("A[i2,j3] = $(A[i2,j3,k])")
-    # println("A[i3,j3] = $(A[i3,j3,k])")
-    # println("A[i4,j3] = $(A[i4,j3,k])")
-    #
-    # println("A[i1,j4] = $(A[i1,j4,k])")
-    # println("A[i2,j4] = $(A[i2,j4,k])")
-    # println("A[i3,j4] = $(A[i3,j4,k])")
-    # println("A[i4,j4] = $(A[i4,j4,k])")
-    #
-    # println("Produit = $(((A[i1,j1,k]*wgt1[1] +
-    #          A[i2,j1,k]*wgt1[2] +
-    #          A[i3,j1,k]*wgt1[3] +
-    #          A[i4,j1,k]*wgt1[4])*wgt2[1] +
-    #         (A[i1,j2,k]*wgt1[1] +
-    #          A[i2,j2,k]*wgt1[2] +
-    #          A[i3,j2,k]*wgt1[3] +
-    #          A[i4,j2,k]*wgt1[4])*wgt2[2] +
-    #         (A[i1,j3,k]*wgt1[1] +
-    #          A[i2,j3,k]*wgt1[2] +
-    #          A[i3,j3,k]*wgt1[3] +
-    #          A[i4,j3,k]*wgt1[4])*wgt2[3] +
-    #         (A[i1,j4,k]*wgt1[1] +
-    #          A[i2,j4,k]*wgt1[2] +
-    #          A[i3,j4,k]*wgt1[3] +
-    #          A[i4,j4,k]*wgt1[4])*wgt2[4]))\n")
-
     res =  ((A[i1,j1,k]*wgt1[1] +
              A[i2,j1,k]*wgt1[2] +
              A[i3,j1,k]*wgt1[3] +
@@ -1263,14 +1173,11 @@ end
 end
 
 """
-    error_orb_elem_CramerRao(dat, orb, ker; calib) -> σ_μ, Iμ
+    error_orb_elem_CramerRao(dat, orb, ker) -> σ_μ, Iμ
 
 estimates the errors associated to the orbital elements of `orb` through
 Cramer-Rao bounds with respect to PACO data `dat` interpolated by `ker`.
 Interpolation kernel `ker` must to be of support 4.
-
-Optional argument `cal` is a boolen to specify whether data `dat` is
-calibrated in flux or not. Default is `false`.
 
 The returned value `σ_μ` is a 7-elements vector containing the errors
 of each orbital elements (resp. : a, e, i, τ, ω, Ω, K).
@@ -1343,9 +1250,12 @@ function error_orb_elem_CramerRao!(Itot::AbstractArray{T,3},
 end
 
 """
-    error_orb_elem_pertubation
+    error_orb_elem_pertubation(dat, orb, ker, grid; ...) ->
 
-    error_orb_elem_pertubation!
+estimates a set of perturbed orbits using a perturbative method on the
+orbital elements `orb` and PACO data `dat`. The inteprolation is performed by
+`ker`. Interpolation kernel `ker` must to be of support 4.
+
 """
 
 function error_orb_elem_pertubation(dat::PacomeData{T,3},
@@ -1399,9 +1309,6 @@ function error_orb_elem_pertubation(dat::PacomeData{T,3},
     print(repeat("\n", nthreads))
 
     return orbs
-
-#     err, Cov = orb_elem_cov_and_err(orbs, orb)
-#     return err, Cov, orbs
 end
 
 function error_orb_elem_pertubation!(dat::PacomeData{T,3},
@@ -1439,86 +1346,6 @@ function error_orb_elem_pertubation!(dat::PacomeData{T,3},
            orbs[:,k], = optimize_orb_param(dat_copy, orb_arr, ker, bounds, pts, ROI;
                                           cal=cal, λ=λ, hard=hard, maxeval=maxeval)
        catch e
-           #println("$e")
-           orbs[:,k] .= NaN
-           # if e isa AssertionError
-           #     orbs[:,k] .= NaN
-           # else
-           #     throw(e)
-           # end
-       end
-       update!(pbar, k-k_sta+1)
-   end
-
-   dat_copy = 0
-end
-
-function error_orb_elem_pertubation2(dat::PacomeData{T,3},
-                                  orb::Orbit{T},
-                                  ker::Kernel{T,4},
-                                  grid::Grid{T};
-                                  nb_iter::Int=1000,
-                                  cal::Bool=false,
-                                  λ::Int=0,
-                                  hard::Bool=true,
-                                  maxeval::Int=100_000) where {T<:AbstractFloat}
-
-    nthreads = Threads.nthreads()
-    intervs = split_on_threads(nb_iter, nthreads)
-
-    # Pixel positions of the object in the maps at all time t
-    for t in 1:length(dat)
-        ΔRA, ΔDec = projected_position(orb, dat.epochs[t])
-        pixpos = dat.centers[t] + Point(-ΔRA, ΔDec)/dat.pixres[t]
-        pixpos = round(Int, pixpos)
-    end
-
-    orbs = Array{T,2}(undef, (7,nb_iter))
-    # time_ex = fill!(Vector{T}(undef, nb_iter), NaN)
-
-    print("\nComputing errors...")
-    Threads.@threads for n in 1:nthreads
-        error_orb_elem_pertubation2!(dat, orb, ker, grid, orbs,
-                                    intervs[n], cal, λ, hard, maxeval)
-    end
-    print(repeat("\n", nthreads))
-
-    orbs = orbs[:,findall(!isnan, orbs[1,:])]
-    wrap_orb!(orbs)
-
-    err, cov = orb_elem_cov_and_err(orbs, orb)
-    return err, cov, orbs
-end
-
-function error_orb_elem_pertubation2!(dat::PacomeData{T,3},
-                                     orb::Orbit{T},
-                                     ker::Kernel{T,4},
-                                     grid::Grid{T},
-                                     orbs::Array{T,2},
-                                     interv::Tuple{Int64, Int64},
-                                     cal::Bool,
-                                     λ::Int,
-                                     hard::Bool,
-                                     maxeval::Int) where {T<:AbstractFloat}
-
-   id = Threads.threadid()
-   dat_copy = deepcopy(dat)
-   orb_arr = orb2arr(orb)
-   nx, ny, nλ = size(dat.b[1])
-
-   k_sta, k_end = first(interv), last(interv)
-   nk = k_end - k_sta + 1
-   pbar = Progress(nk; dt=1, desc="Thread $id : ", start=0, offset=id)
-   for k in k_sta:k_end
-       for t in 1:length(dat_copy.b)
-           dat_copy.b[t] = dat.b[t] + 1 * sqrt.(dat.a[t]) .*
-                                            randn((nx, ny,dat.dims[end]))
-       end
-
-       try
-           orbs[:,k], = optimize_orb_param(dat_copy, orb_arr, ker, grid;
-                                           cal=cal, λ=λ, hard=hard)
-       catch e
            orbs[:,k] .= NaN
        end
        update!(pbar, k-k_sta+1)
@@ -1530,29 +1357,49 @@ end
 """
     PACOME_MT_mmap(data, grid, ker, nthreads) -> best_orbit
 
-same as PACOME_multi_threads but saves the whole array of combined SNRs in
-a memory mapped file.
+runs the PACOME algorithm on the `grid` structure using the multi-epoch
+observations `data` and the interpolation kernel `ker`. A specified number of
+threads `nthreads` is used for the search. The results are stored in a mmap file
+`mmap_file_path`.
+
+Optional argument `fcost_lim` corresponds to the minimal cost score above which
+the orbits are saved, `cal` is to specify whether the data is calibrated or not.
+The spectral channels to consider is given by `λ`.
 
 """
-
 function PACOME_MT_mmap(data::PacomeData{T,N},
                         grid::Grid{T},
-                        field::Vector{Array{T,2}},
                         ker::Kernel{T},
                         nthreads::Int,
                         mmap_file_path::String;
                         fcost_lim::T=0.,
                         cal::Bool=false,
                         λ::Int=0) where {T<:AbstractFloat,N}
+
     nλ = data.dims[3]
     nt = length(data)
-    intervs = split_on_threads(grid.norbits, nthreads)
     cpt = fill!(Array{Int,1}(undef, nthreads), 0)
 
+    ss = [open(split(mmap_file_path,".bin")[1] * "_part$i.bin", "w+") for i in 1:Threads.nthreads()]
+
+    @unpack a, e, i, τ, ω, Ω, K = grid
+
     # Multi-threading
-    Threads.@threads for n in 1:nthreads
-        PACOME_PT_mmap!(data, grid, intervs[n], field[n], ker, cpt,
-                        mmap_file_path, fcost_lim, cal, λ)
+    Threads.@threads for k in 1:grid.norbits
+        a_k, e_k, i_k, τ_k, ω_k, Ω_k, K_k = orb_comb(k, a, e, i, τ, ω, Ω, K)
+        orb = Orbit{T}(a = a_k, e = e_k, i = i_k, τ = τ_k,
+                       ω = ω_k, Ω = Ω_k, K = K_k)
+
+        fcost = cost_func(data, orb, ker; cal=cal, λ=λ)
+
+        if (fcost > fcost_lim)
+            write(ss[Threads.threadid()], [fcost, k])
+            cpt[Threads.threadid()] = cpt[Threads.threadid()] + 1
+        end
+    end
+
+    for i in 1:Threads.nthreads()
+        close(ss[i])
     end
 
     s = open(mmap_file_path, "w+")
@@ -1579,79 +1426,6 @@ function PACOME_MT_mmap(data::PacomeData{T,N},
     return [all_orbs[1,idx_max], a_k, e_k, i_k, τ_k, ω_k, Ω_k, K_k]
 end
 
-function PACOME_PT_mmap!(data::PacomeData{T,N},
-                     grid::Grid{T},
-                     interv::Tuple{Int,Int},
-                     field::Array{T,2},
-                     ker::Kernel{T},
-                     cpt::Array{Int,1},
-                     mmap_file_path::String,
-                     fcost_lim::T,
-                     cal::Bool,
-                     λ::Int) where {T<:AbstractFloat,N}
-
-    nt = length(data)
-    nλ = data.dims[3]
-    id = Threads.threadid()
-    s = open(split(mmap_file_path,".bin")[1] * "_part$id.bin", "w+")
-    @unpack a, e, i, τ, ω, Ω, K = grid
-
-    for k in interv[1]:interv[end]
-        a_k, e_k, i_k, τ_k, ω_k, Ω_k, K_k = orb_comb(k, a, e, i,
-                                                             τ, ω, Ω, K)
-        orb = Orbit{T}(a = a_k, e = e_k, i = i_k, τ = τ_k,
-                              ω = ω_k, Ω = Ω_k, K = K_k)
-        #snr = snr(data, orb, field, ker)
-        fcost = cost_func(data, orb, ker, cal=cal, λ=λ)
-
-        if (fcost > fcost_lim)
-            write(s, [fcost, k])
-            cpt[id] = cpt[id] + 1
-        end
-    end
-    close(s)
-end
-
-"""
-    PACOME_run(data, grid, ker, nthreads) -> best_orbit
-
-"""
-
-function PACOME_run(data::PacomeData{T,N},
-                    grid::Grid{T},
-                    ker::Kernel{T};
-                    cal::Bool=false,
-                    λ::Int=0) where {T<:AbstractFloat,N}
-    nλ = data.dims[3]
-    nt = length(data)
-
-    all_fcost = Array{T,1}(undef, grid.norbits)
-
-    PACOME_run!(data, grid, all_fcost, ker, cal, λ)
-
-    return all_fcost
-end
-
-function PACOME_run!(data::PacomeData{T,N},
-                     grid::Grid{T},
-                     all_fcost::Array{T,1},
-                     ker::Kernel{T},
-                     cal::Bool,
-                     λ::Int) where {T<:AbstractFloat,N}
-
-    nt = length(data)
-    nλ = data.dims[3]
-    @unpack a, e, i, τ, ω, Ω, K = grid
-
-    for k in 1:length(all_fcost)
-        a_k, e_k, i_k, τ_k, ω_k, Ω_k, K_k = orb_comb(k, a, e, i, τ, ω, Ω, K)
-        orb = Orbit{T}(a = a_k, e = e_k, i = i_k, τ = τ_k,
-                              ω = ω_k, Ω = Ω_k, K = K_k)
-
-        all_fcost[k] = cost_func(data, orb, ker, cal=cal, λ=λ)
-    end
-end
-
 """
     cost_func(dat, orb, ker; cal, λ) -> fcost
 
@@ -1674,10 +1448,10 @@ whithin the lower and upper bounds `lower` and `upper`.
 
 """
 function cost_func(dat::PacomeData{T,N},
-                          orb::Orbit{T},
-                          ker::Kernel{T};
-                          cal::Bool=false,
-                          λ::Int=0) where {T<:AbstractFloat,N}
+                  orb::Orbit{T},
+                  ker::Kernel{T};
+                  cal::Bool=false,
+                  λ::Int=0) where {T<:AbstractFloat,N}
 
    nt = length(dat)
    nλ = dat.dims[end]
@@ -1783,6 +1557,18 @@ function cost_func(snrs::Vector{AbstractFloat})
    return C
 end
 
+
+"""
+    cost_func_deriv_wrt_orb(dat, orb, ker; λ) -> fcost
+
+computes the value of the PACOME cost function for the orbit `orb` as well as
+its semi-analytic derivatives with respect to the orbital elements on data `dat`
+with kernel `ker`.
+
+Keyword `λ` specifies whether the cost function should be combining the spectral
+channels (`λ=0`) or computed only on specific channel (`λ=n` where n ∈ [1,nλ])
+
+"""
 function cost_func_deriv_wrt_orb(dat::PacomeData{T,3}, orb::Orbit{T},
                                  ker::Kernel{T};
                                  λ::Int=0) where {T<:AbstractFloat}
@@ -1791,7 +1577,6 @@ function cost_func_deriv_wrt_orb(dat::PacomeData{T,3}, orb::Orbit{T},
    nλ = last(dat.dims)
    @assert 0 ≤ λ ≤ nλ
 
-   # println("e = $(orb.e)")
    a, b, ∂a, ∂b = interpolate_ab_derivs_wrt_orb(dat, orb, ker)
    ∂C = fill!(Vector{T}(undef, 7),0)
    C = 0
@@ -1830,6 +1615,14 @@ function cost_func_deriv_wrt_orb(dat::PacomeData{T,3}, orb::Vector{T},
    return cost_func_deriv_wrt_orb(dat, arr2orb(orb), ker; kwds...)
 end
 
+
+"""
+    cost_func_deriv_wrt_orb_fd(dat, orb, ker; λ) -> fcost
+
+same as the function `cost_func_deriv_wrt_orb` but the derivatives are
+estimated via finite differences (longer).
+
+"""
 function cost_func_deriv_wrt_orb_fd(dat::PacomeData{T,3}, orb::Orbit{T},
                                     ker::Kernel{T};
                                     λ::Int=0,
@@ -1847,9 +1640,7 @@ end
 
 computes the SNR of an orbit with parameters `orb` in PACO data `dat`.
 Optional argument `ker` is to specify the interpolation kernel (a linear spline
-by default).  If `dat` stores multi-channel data, a vector of SNRs is returned.
-Optional argument `cal` specifies whether data `dat` is calibrated in flux or
-not and changes the way the snr is computed. Default is `cal=false`.
+by default).
 
 """
 function snr(dat::PacomeData{T,3}, orb::Orbit{T},
@@ -1860,9 +1651,8 @@ end
 """
     snr_monoepoch(dat, orb, ker)
 
-computes the monoepoch SNRs of an orbit with parameters `orb` in PACO data `dat`.
-Optional argument `ker` is to specify the interpolation kernel.
-If `dat` stores multi-channel data, a vector of SNRs is returned.
+computes the monoepoch SNRs of an orbit with parameters `orb` in PACO data `dat`
+with inteprolation kernel `ker`.
 
 """
 function snr_monoepoch(dat::PacomeData{T,3}, orb::Orbit{T},
@@ -1881,142 +1671,6 @@ function snr_monoepoch(dat::PacomeData{T,3}, orb::Vector{T},
                        ker::Kernel{T}; kwds...) where {T<:AbstractFloat}
    @assert length(orb) == 7
    return snr_monoepoch(dat, arr2orb(orb), ker; kwds...)
-end
-
-"""
-    cost_func_median(dat, orb, ker; λ) -> fcost
-
-computes the median of all mono-epoch S/N of the orbit `orb` on data `dat` with
-kernel `ker`.
-
-Keyword `λ` specifies whether the cost function should be computed on the spectral
-channels (`λ=0`) or computed only on specific channel (`λ=n` where n ∈ [1,nλ])
-
-"""
-
-function cost_func_median(dat::PacomeData{T,N},
-                          orb::Orbit{T},
-                          ker::Kernel{T};
-                          λ::Int=0) where {T<:AbstractFloat,N}
-
-   nt = length(dat)
-   nλ = dat.dims[end]
-   @assert 0 ≤ λ ≤ nλ
-
-   if orb.e > 0.999999
-       x = orb2arr(orb)
-       x[2] = 0.99999
-       orb = arr2orb(x)
-   end
-   as, bs = interpolate(dat, orb, ker)
-
-   if λ == 0
-       snrs = fill!(Array{T,2}(undef, (nλ, nt)), NaN)
-       for λi in 1:nλ
-           for t in 1:nt
-               if as[λi,t] > 0
-                   snrs[λi,t] = bs[λi,t] / sqrt(as[λi,t])
-               end
-           end
-       end
-   else
-       snrs = fill!(Vector{T}(undef, nt), NaN)
-       for t in 1:nt
-           as[λ,t] > 0 ? snrs[t] = bs[λ,t] / sqrt(as[λ,t]) : nothing
-       end
-   end
-
-   return median(filter(!isnan, snrs))
-end
-
-
-function cost_func_median(dat::PacomeData{T,N},
-                          orb::Array{T,1},
-                          ker::Kernel{T};
-                          kwds...) where {T<:AbstractFloat,N}
-
-   return cost_func_median(dat, arr2orb(orb), ker; kwds...)
-end
-
-function cost_func_median(snrs::Vector{AbstractFloat})
-
-   return median(filter(!isnan, snrs))
-end
-
-function cost_func_signed(dat::PacomeData{T,N},
-                          orb::Orbit{T},
-                          ker::Kernel{T};
-                          λ::Int=0) where {T<:AbstractFloat,N}
-
-   nt = length(dat)
-   nλ = dat.dims[end]
-   @assert 0 ≤ λ ≤ nλ
-
-   if orb.e > 0.999999
-       x = orb2arr(orb)
-       x[2] = 0.99999
-       orb = arr2orb(x)
-   end
-   as, bs = interpolate(dat, orb, ker)
-
-   C = 0
-   if λ == 0
-       for λi in 1:nλ
-           for t in 1:nt
-               if as[λi,t] > 0
-                   C += (bs[λi,t]^2 / as[λi,t]) * sign(bs[λi,t])
-               end
-           end
-       end
-   else
-       for t in 1:nt
-           if as[λ,t] > 0
-               C += (bs[λ,t]^2 / as[λ,t]) * sign(bs[λi,t])
-           end
-       end
-   end
-
-   return C
-end
-
-
-function cost_func_signed(dat::PacomeData{T,N},
-                          orb::Array{T,1},
-                          ker::Kernel{T};
-                          kwds...) where {T<:AbstractFloat,N}
-
-   return cost_func_signed(dat, arr2orb(orb), ker; kwds...)
-end
-
-function cost_func_signed(snrs::Vector{AbstractFloat})
-
-   C = 0
-   for snr in snrs
-       isnan!(C) ? (C += snr^2 * sign(snr)) : nothing
-   end
-   return C
-end
-
-function snr_signed(dat::PacomeData{T,N},
-                    orb::Orbit{T},
-                    ker::Kernel{T};
-                    kwds...) where {T<:AbstractFloat,N}
-
-   C = cost_func_signed(dat, orb, ker; kwds...)
-   return sqrt(abs(C)) * sign(C)
-end
-
-function snr_signed(dat::PacomeData{T,N},
-                    orb::Array{T,1},
-                    ker::Kernel{T};
-                    kwds...) where {T<:AbstractFloat,N}
-
-   return snr_signed(dat, arr2orb(orb), ker; kwds...)
-end
-
-function snr_signed(snrs::Vector{AbstractFloat})
-   C = cost_func_signed(snrs)
-   return sqrt(abs(C)) * sign(C)
 end
 
 """
@@ -2176,9 +1830,10 @@ end
 function optimize_orb_param(dat::PacomeData{T,3},
                             orb::Vector{T},
                             ker::Kernel{T,4},
-                            bounds::Tuple{Vector{T},Vector{T}}) where {T<:AbstractFloat}
+                            bounds::Tuple{Vector{T},Vector{T}};
+                            kwds...) where {T<:AbstractFloat}
 
-   return optimize_orb_param(dat, arr2orb(orb), ker, bounds)
+   return optimize_orb_param(dat, arr2orb(orb), ker, bounds; kwds...)
 end
 function optimize_orb_param(dat::PacomeData{T,3},
                             orb::Orbit{T},
@@ -2224,65 +1879,6 @@ function optimize_orb_param(dat::PacomeData{T,3},
 
     return x, cost_func(dat, x, ker)
 end
-
-# function optimize_orb_param(dat::PacomeData{T,3},
-#                             orb::Orbit{T},
-#                             ker::Kernel{T,4};
-#                             λ::Int=0,
-#                             cal::Bool=false,
-#                             verb::Bool=false,
-#                             hard::Bool=true) where {T<:AbstractFloat}
-#
-#     nt = length(dat)
-#     nλ = dat.dims[end]
-#     @assert 0 ≤ λ ≤ nλ
-#
-#     x0 = orb2arr(orb)
-#     x0[4] = mod(x0[4],1)
-#
-#     fx(x::Array{T,1}) where {T<:AbstractFloat} = -cost_func(dat, x, ker;
-#                                                                    cal=cal, λ=λ)
-#
-#     lb = [0., 0., -Inf, 0, -Inf, -Inf, 0.]
-#     ub = [+Inf, 0.999999, +Inf, +Inf, +Inf, +Inf, +Inf]
-#
-#     function fg!(x, gx)
-#         for μ in 1:7
-#             (x[μ] < lb[μ] || x[μ] > ub[μ]) && return +Inf
-#         end
-#
-#         mr_l, mr_u = minimum(x - lb), minimum(ub - x)
-#
-#         if mr_l == 0. && mr_u != 0.
-#             # println("1 ->")
-#             gx[:], = grad(forward_fdm(5,1), fx, x)
-#         elseif mr_l != 0. && mr_u == 0.
-#             # println("2 ->")
-#             gx[:], = grad(backward_fdm(5,1), fx, x)
-#         elseif mr_l == 0. && mr_u == 0.
-#             # println("3 -> $x")
-#             gx[:] .= NaN
-#             return +Inf
-#         else
-#             # println("4 -> $x")
-#             mr = 0.99 * min(mr_l, mr_u)
-#             gx[:], = grad(central_fdm(5,1, max_range=mr), fx, x)
-#         end
-#
-#         return fx(x)
-#     end
-#
-#
-#     if hard
-#         x = vmlmb(fg!, x0; verb=verb, lower=lb, upper=ub,
-#                   xtol = (0.0,0.0), ftol = (0.0,0.0), gtol = (0.0,0.0))
-#     else
-#         x = vmlmb(fg!, x0; verb=verb, lower=lb, upper=ub,
-#                   xtol = (0.0,1e-9), ftol = (0.0,1e-10), gtol = (0.0,1e-8))
-#     end
-#
-#     return x, -fx(x)
-# end
 
 function optimize_orb_param(dat::PacomeData{T,3},
                             orb::Orbit{T},
@@ -2376,8 +1972,6 @@ function optimize_orb_param(dat::PacomeData{T,3},
     nλ = dat.dims[end]
     @assert 0 ≤ λ ≤ nλ
 
-    # lb = [0., 0., -Inf, 0, -Inf, -Inf, 0.]
-    # ub = [+Inf, 0.999999, +Inf, +Inf, +Inf, +Inf, +Inf]
     lb, ub = bounds
 
     fx(x::Vector{T}) where {T<:AbstractFloat} = -cost_func(dat, x, ker,
@@ -2407,365 +2001,6 @@ function optimize_orb_param(dat::PacomeData{T,3},
 
     return x, cost_func(dat, x, ker)
 end
-
-function optimize_multi_orb_param(dat::PacomeData{T,3},
-                            orbs::Array{T,2},
-                            ker::Kernel{T,4},
-                            grid::Grid{T};
-                            fixed_μ::BitVector=Bool.([0,0,1,0,0,1,1]),
-                            verb::Bool=false,
-                            hard::Bool=true,
-                            λ::Int=0,
-                            maxeval::Int=typemax(Int)) where {T<:AbstractFloat}
-
-    nt = length(dat)
-    nλ = dat.dims[end]
-    @assert 0 ≤ λ ≤ nλ
-    @assert size(orbs,1)==7
-    @assert length(fixed_μ)==7
-    @assert all(std(orbs[fixed_μ,:],dims=2) .== 0)
-    ns = size(orbs,2)
-
-    x0 = reshape(orbs[.!fixed_μ,:], (sum(.!fixed_μ)*ns))
-    x0 = vcat(orbs[fixed_μ,1], x0)
-
-    grids = [grid.a, grid.e, grid.i, grid.τ, grid.ω, grid.Ω, grid.K]
-    # lb = [0., 0., -Inf, 0, -Inf, -Inf, 0.]
-    # ub = [+Inf, 0.999999, +Inf, +Inf, +Inf, +Inf, +Inf]
-    lb = fill!(Vector{T}(undef, length(x0)), NaN)
-    ub = fill!(Vector{T}(undef, length(x0)), NaN)
-
-    for (i,g) in enumerate(grids[fixed_μ])
-        lb[i], ub[i] = g.start, g.stop
-    end
-    for (ii,i) in enumerate(findall(.!fixed_μ))
-        for s in 1:ns
-            # println(sum(fixed_μ)+ii+sum(.!fixed_μ)*(s-1))
-            lb[sum(fixed_μ)+ii+sum(.!fixed_μ)*(s-1)] = grids[i].start
-            ub[sum(fixed_μ)+ii+sum(.!fixed_μ)*(s-1)] = grids[i].stop
-        end
-    end
-
-    function fg!(x::Vector{T}, ∂C::Vector{T})
-        for μ in 1:7
-            (x[μ] < lb[μ] || x[μ] > ub[μ]) && return +Inf
-        end
-
-        all_x = fill!(Array{T,2}(undef, (7, ns)), NaN)
-        all_x[fixed_μ,:] .= x[1:sum(fixed_μ)]
-        for (ii,i) in enumerate(findall(.!fixed_μ))
-            for s in 1:ns
-                all_x[i,s] = x[sum(fixed_μ)+ii+sum(.!fixed_μ)*(s-1)]
-            end
-        end
-
-        tot_C = 0
-        ∂C[:] .= 0
-        for s in 1:ns
-            C, ∂Cs = cost_func_deriv_wrt_orb(dat, arr2orb(all_x[:,s]), ker; λ=λ)
-
-            tot_C += C^2
-
-            for (ii,i) in enumerate(findall(.!fixed_μ))
-                ∂C[sum(fixed_μ)+ii+sum(.!fixed_μ)*(s-1)] = -2*∂Cs[i]*C
-            end
-            for (ii,i) in enumerate(findall(fixed_μ))
-                ∂C[ii] += -2*∂Cs[i]*C
-            end
-        end
-
-        return -tot_C
-    end
-
-    if hard
-        x = vmlmb(fg!, x0; verb=verb, lower=lb, upper=ub, maxeval=maxeval,
-                  xtol = (0.0,0.0), ftol = (0.0,0.0), gtol = (0.0,0.0))
-    else
-        x = vmlmb(fg!, x0; verb=verb, lower=lb, upper=ub, maxeval=maxeval,
-                  # xtol = (0.0,1e-9), ftol = (0.0,1e-10), gtol = (0.0,1e-8))
-                  xtol = (0.0,1e-13), ftol = (0.0,1e-14), gtol = (0.0,1e-12))
-    end
-
-    all_x = fill!(Array{T,2}(undef, (7, ns)), NaN)
-    all_x[fixed_μ,:] .= x[1:sum(fixed_μ)]
-    for (ii,i) in enumerate(findall(.!fixed_μ))
-        for s in 1:ns
-            all_x[i,s] = x[sum(fixed_μ)+ii+sum(.!fixed_μ)*(s-1)]
-        end
-    end
-
-    return all_x, [cost_func(dat,arr2orb(all_x[:,s]),ker) for s in 1:ns]
-end
-
-function optimize_multi_orb_param_fd(dat::PacomeData{T,3},
-                            orbs::Array{T,2},
-                            ker::Kernel{T,4},
-                            grid::Grid{T};
-                            fixed_μ::BitVector=Bool.([0,0,1,0,0,1,1]),
-                            verb::Bool=false,
-                            hard::Bool=true,
-                            λ::Int=0,
-                            maxeval::Int=typemax(Int)) where {T<:AbstractFloat}
-
-    nt = length(dat)
-    nλ = dat.dims[end]
-    @assert 0 ≤ λ ≤ nλ
-    @assert size(orbs,1)==7
-    @assert length(fixed_μ)==7
-    @assert all(std(orbs[fixed_μ,:],dims=2) .== 0)
-    ns = size(orbs,2)
-
-    x0 = reshape(orbs[.!fixed_μ,:], (sum(.!fixed_μ)*ns))
-    x0 = vcat(orbs[fixed_μ,1], x0)
-
-    grids = [grid.a, grid.e, grid.i, grid.τ, grid.ω, grid.Ω, grid.K]
-    # lb = [0., 0., -Inf, 0, -Inf, -Inf, 0.]
-    # ub = [+Inf, 0.999999, +Inf, +Inf, +Inf, +Inf, +Inf]
-    lb = fill!(Vector{T}(undef, length(x0)), NaN)
-    ub = fill!(Vector{T}(undef, length(x0)), NaN)
-
-    for (i,g) in enumerate(grids[fixed_μ])
-        lb[i], ub[i] = g.start, g.stop
-    end
-    for (ii,i) in enumerate(findall(.!fixed_μ))
-        for s in 1:ns
-            # println(sum(fixed_μ)+ii+sum(.!fixed_μ)*(s-1))
-            lb[sum(fixed_μ)+ii+sum(.!fixed_μ)*(s-1)] = grids[i].start
-            ub[sum(fixed_μ)+ii+sum(.!fixed_μ)*(s-1)] = grids[i].stop
-        end
-    end
-
-    function fx(x::Vector{T})
-        all_x = fill!(Array{T,2}(undef, (7, ns)), NaN)
-        all_x[fixed_μ,:] .= x[1:sum(fixed_μ)]
-        for (ii,i) in enumerate(findall(.!fixed_μ))
-            for s in 1:ns
-                all_x[i,s] = x[sum(fixed_μ)+ii+sum(.!fixed_μ)*(s-1)]
-            end
-        end
-        tot_C = 0
-        for s in 1:ns
-            tot_C += cost_func(dat, all_x[:,s], ker)^2
-        end
-        return -tot_C
-    end
-
-    function fg!(x::Vector{T}, ∂C::Vector{T})
-        for μ in 1:7
-            (x[μ] < lb[μ] || x[μ] > ub[μ]) && return +Inf
-        end
-
-        mr_l, mr_u = minimum(x - lb), minimum(ub - x)
-
-        if mr_l == 0. && mr_u != 0.
-            ∂C[:], = grad(forward_fdm(5,1), fx, x)
-        elseif mr_l != 0. && mr_u == 0.
-            ∂C[:], = grad(backward_fdm(5,1), fx, x)
-        elseif mr_l == 0. && mr_u == 0.
-            ∂C[:] .= NaN
-            return +Inf
-        else
-            mr = 0.99 * min(mr_l, mr_u)
-            ∂C[:], = grad(central_fdm(5,1, max_range=mr), fx, x)
-        end
-
-        return fx(x)
-    end
-
-    if hard
-        x = vmlmb(fg!, x0; verb=verb, lower=lb, upper=ub, maxeval=maxeval,
-                  xtol = (0.0,0.0), ftol = (0.0,0.0), gtol = (0.0,0.0))
-    else
-        x = vmlmb(fg!, x0; verb=verb, lower=lb, upper=ub, maxeval=maxeval,
-                  # xtol = (0.0,1e-9), ftol = (0.0,1e-10), gtol = (0.0,1e-8))
-                  xtol = (0.0,1e-10), ftol = (0.0,1e-11), gtol = (0.0,1e-9))
-    end
-
-    all_x = fill!(Array{T,2}(undef, (7, ns)), NaN)
-    all_x[fixed_μ,:] .= x[1:sum(fixed_μ)]
-    for (ii,i) in enumerate(findall(.!fixed_μ))
-        for s in 1:ns
-            all_x[i,s] = x[sum(fixed_μ)+ii+sum(.!fixed_μ)*(s-1)]
-        end
-    end
-
-    return all_x, [cost_func(dat,arr2orb(all_x[:,s]),ker) for s in 1:ns]
-end
-
-# function optimize_orb_param(dat::PacomeData{T,3},
-#                             orb::Vector{T},
-#                             ker::Kernel{T,4},
-#                             pts::Array{Int,2},
-#                             ROI::Int;
-#                             λ::Int=0,
-#                             cal::Bool=false,
-#                             verb::Bool=false,
-#                             hard::Bool=true) where {T<:AbstractFloat}
-#
-#     nt = length(dat)
-#     nλ = dat.dims[end]
-#     @assert 0 ≤ λ ≤ nλ
-#     lb = [0., 0., -Inf, 0, -Inf, -Inf, 0.]
-#     ub = [+Inf, 0.999999, +Inf, +Inf, +Inf, +Inf, +Inf]
-#
-#     fx(x::Array{T,1}) where {T<:AbstractFloat} = -cost_func(dat, x, ker,
-#                                                                    pts, ROI,
-#                                                                    lb, ub;
-#                                                                    cal=cal, λ=λ)
-#
-#     function fg!(x, gx)
-#         for μ in 1:7
-#             (x[μ] < lb[μ] || x[μ] > ub[μ]) && return +Inf
-#         end
-#
-#         mr_l, mr_u = minimum(x - lb), minimum(ub - x)
-#
-#         if mr_l == 0. && mr_u != 0.
-#             # println("1 ->")
-#             gx[:], = grad(forward_fdm(5,1), fx, x)
-#         elseif mr_l != 0. && mr_u == 0.
-#             # println("2 ->")
-#             gx[:], = grad(backward_fdm(5,1), fx, x)
-#         elseif mr_l == 0. && mr_u == 0.
-#             # println("3 -> $x")
-#             gx[:] .= NaN
-#             return +Inf
-#         else
-#             # println("4 -> $x")
-#             mr = 0.99 * min(mr_l, mr_u)
-#             gx[:], = grad(central_fdm(5,1, max_range=mr), fx, x)
-#         end
-#
-#         return fx(x)
-#     end
-#
-#
-#     if hard
-#         x = vmlmb(fg!, orb; verb=verb, lower=lb, upper=ub,
-#                   xtol = (0.0,0.0), ftol = (0.0,0.0), gtol = (0.0,0.0))
-#     else
-#         x = vmlmb(fg!, orb; verb=verb, lower=lb, upper=ub,
-#                   xtol = (0.0,1e-9), ftol = (0.0,1e-10), gtol = (0.0,1e-8))
-#     end
-#
-#     return x, -fx(x)
-# end
-
-# function optimize_coplan_orbs_param(dat::PacomeData{T,3},
-#                             orbs::Array{T,2},
-#                             resonances::Array{T},
-#                             ker::Kernel{T,4}; kwds...) where {T<:AbstractFloat}
-#
-#     lb_μ = [0., 0., -Inf, 0, -Inf, -Inf, 0.]
-#     ub_μ = [+Inf, 0.999999, +Inf, +Inf, +Inf, +Inf, +Inf]
-#     return optimize_coplan_orbs_param(dat, orbs, resonances, ker,
-#                                       lb_μ, ub_μ; kwds...)
-# end
-#
-# function optimize_coplan_orbs_param(dat::PacomeData{T,3},
-#                             orbs::Array{T,2},
-#                             resonances::Array{T},
-#                             ker::Kernel{T,4},
-#                             lb_μ::Vector{T},
-#                             ub_μ::Vector{T};
-#                             λ::Int=0,
-#                             cal::Bool=false,
-#                             verb::Bool=false,
-#                             hard::Bool=true) where {T<:AbstractFloat}
-#
-#     norbs = size(orbs,2)
-#     nt = length(dat)
-#     nλ = dat.dims[end]
-#     nparam = 3+4*norbs
-#     @assert length(lb_μ) == length(ub_μ) == 7
-#     @assert length(resonances) == norbs
-#     @assert 0 ≤ λ ≤ nλ
-#
-#     x0 = Array{T,1}(undef, nparam)
-#     x0[1:3] = orbs[[3,6,7],1]
-#     for (ii,i) in enumerate([1,2,4,5])
-#         x0[4+(ii-1)*norbs:4+ii*norbs-1] .= orbs[i,:]
-#     end
-#
-#     function fx(x::Array{T,1}) where {T<:AbstractFloat}
-#         C = 0
-#         new_orbs = Array{T,2}(undef, (7, norbs))
-#         P = Array{T,1}(undef, norbs)
-#         new_orbs[[3,6,7],:] .= x[1:3]
-#         for (ii,i) in enumerate([1,2,4,5])
-#             new_orbs[i,:] .= x[4+(ii-1)*norbs:4+ii*norbs-1]
-#         end
-#         for n in 1:norbs
-#             P[n] = sqrt(new_orbs[1,n]^3/new_orbs[7,n])
-#             try
-#                 temp = cost_func(dat, new_orbs[:,n], ker; cal=cal, λ=λ)
-#                 #C += temp^2
-#                 C += temp
-#             catch e
-#                 return +Inf
-#             end
-#         end
-#
-#         diff_res = abs.((P[1] ./ P) .- resonances)
-#         if any(diff_res .> 0.25)
-#             return +Inf
-#         else
-#             return -C
-#         end
-#         # w = sum(((P[1] ./ P) .- resonances).^2)
-#         # return -C/w
-#     end
-#
-#     lb, ub = lb_μ[[3,6,7]], ub_μ[[3,6,7]]
-#     for i in [1,2,4,5]
-#         for n in 1:norbs
-#             push!(lb, lb_μ[i])
-#             push!(ub, ub_μ[i])
-#         end
-#     end
-#
-#     function fg!(x, gx)
-#         for μ in 1:nparam
-#             (x[μ] < lb[μ] || x[μ] > ub[μ]) && return +Inf
-#         end
-#
-#         mr_l, mr_u = minimum(x - lb), minimum(ub - x)
-#
-#         if mr_l == 0. && mr_u != 0.
-#             # println("1 ->")
-#             gx[:], = grad(forward_fdm(5,1), fx, x)
-#         elseif mr_l != 0. && mr_u == 0.
-#             # println("2 ->")
-#             gx[:], = grad(backward_fdm(5,1), fx, x)
-#         elseif mr_l == 0. && mr_u == 0.
-#             # println("3 -> $x")
-#             gx[:] .= NaN
-#             return +Inf
-#         else
-#             # println("4 -> $x")
-#             mr = 0.99 * min(mr_l, mr_u)
-#             gx[:], = grad(central_fdm(5,1, max_range=mr), fx, x)
-#         end
-#
-#         return fx(x)
-#     end
-#
-#     if hard
-#         x = vmlmb(fg!, x0; verb=verb, lower=lb, upper=ub,
-#                   xtol = (0.0,0.0), ftol = (0.0,0.0), gtol = (0.0,0.0))
-#     else
-#         x = vmlmb(fg!, x0; verb=verb, lower=lb, upper=ub,
-#                   xtol = (0.0,1e-9), ftol = (0.0,1e-10), gtol = (0.0,1e-8))
-#     end
-#
-#     new_orbs = Array{T,2}(undef, (7, norbs))
-#     new_orbs[[3,6,7],:] .= x[1:3]
-#     for (ii,i) in enumerate([1,2,4,5])
-#         new_orbs[i,:] .= x[4+(ii-1)*norbs:4+ii*norbs-1]
-#     end
-#
-#     return x, -fx(x), new_orbs
-# end
 
 """
     RMSD_orbs(dat, orb1, orb2, ker) -> RMSD
@@ -2845,316 +2080,6 @@ function RMSD_orbs_to_center(dat::PacomeData{T,N},
     return RMSD_orbs_to_center(dat, arr2orb(orb))
 end
 
-"""
-    empirical_C(nt; N, cal) -> dN, q3σ, q5σ
-
-computes the empirical distribution of the PACOME criterion given the number of
-epoch `nt`, the number of spectral channels `nλ`. The distribution is computed
-with a number of `N` points (set to `N=1e7` by default) and for the calibration
-mode `cal` (set to `cal=false` by default).
-The distribution is returned as well as the empirical 3σ and 5σ quantiles.
-
-"""
-function empirical_C(nt::Int; N::Int=Int(1e6), cal::Bool=false, λ::Int=1)
-
-    nthreads = Threads.nthreads()
-    intervs = split_on_threads(N, nthreads)
-
-    if cal
-        error("Not implemented yet !")
-    else
-        law = Normal(0,1)
-        dC = zeros(N)
-        Threads.@threads for nth in 1:nthreads
-            idx_min, idx_max = intervs[nth]
-            nb = idx_max - idx_min + 1
-            for _ in 1:nt
-                dC[idx_min:idx_max] += max.(0,rand(law, nb)).^2
-            end
-        end
-    end
-
-    q = erf.([3,5]./sqrt(2))
-    return quantile(dC,q), dC
-end
-
-function empirical_C(dat::PacomeData{T,Ndim},
-                     ker::Kernel{T};
-                     N::Int=Int(1e7),
-                     cal::Bool=false,
-                     λ::Int=1) where {T<:AbstractFloat,Ndim}
-
-    @assert 1 ≤ λ < dat.dims[end]
-    nt = length(dat)
-    nthreads = Threads.nthreads()
-    intervs = split_on_threads(N, nthreads)
-
-    if dat.dims[1] == 1448 # IRDIS
-        maxr = 1024÷2 - 100
-    elseif dat.dims[1] == 410 # IFS
-        maxr = 291÷2 - 100
-    else
-        error("Data not recognized !")
-    end
-    minr = maximum([SPHERE_COR_DIAM[dat.icors[i]]
-                    for i in 1:length(dat)])/mean(dat.pixres)
-    dC = zeros(N)
-
-    if cal
-        Threads.@threads for nth in 1:nthreads
-            idx_min, idx_max = intervs[nth]
-            for i in idx_min:idx_max
-                A, B = 0, 0
-                for t in 1:nt
-                    θ = rand()*twopi(T)
-                    r = rand()*(maxr-minr)+minr
-                    pt = Point{T}(r*cos(θ), r*sin(θ)) + dat.centers[t]
-                    A += interpolate(dat.a[t], ker, pt, λ)
-                    B += interpolate(dat.b[t], ker, pt, λ)
-                end
-                dC[i] = max(0,B)^2 / A
-            end
-        end
-    else
-        Threads.@threads for nth in 1:nthreads
-            idx_min, idx_max = intervs[nth]
-            for i in idx_min:idx_max
-                for t in 1:nt
-                    θ = rand()*twopi(T)
-                    r = rand()*(maxr-minr)+minr
-                    pt = Point{T}(r*cos(θ), r*sin(θ)) + dat.centers[t]
-                    a = interpolate(dat.a[t], ker, pt, λ)
-                    b = interpolate(dat.b[t], ker, pt, λ)
-                    dC[i] += max(0,b)^2 / a
-                end
-            end
-        end
-    end
-
-    q = erf.([3,5]./sqrt(2))
-    return quantile(dC,q), dC
-end
-
-function empirical_C(dat::PacomeData{T,Ndim},
-                     sgrid::Grid{T},
-                     ker::Kernel{T};
-                     N::Int=Int(1e7),
-                     cal::Bool=false,
-                     λ::Int=1) where {T<:AbstractFloat,Ndim}
-
-    @assert 1 ≤ λ < dat.dims[end]
-    nt = length(dat)
-    nthreads = Threads.nthreads()
-    intervs = split_on_threads(N, nthreads)
-
-    dC = zeros(N)
-
-    mina, maxa = extrema(sgrid.a)
-    mine, maxe = extrema(sgrid.e)
-    mini, maxi = extrema(sgrid.i)
-    minτ, maxτ = extrema(sgrid.τ)
-    minω, maxω = extrema(sgrid.ω)
-    minΩ, maxΩ = extrema(sgrid.Ω)
-    minK, maxK = extrema(sgrid.K)
-
-    if cal
-        Threads.@threads for nth in 1:nthreads
-            idx_min, idx_max = intervs[nth]
-            for i in idx_min:idx_max
-                A, B = 0, 0
-                O = Orbit{T}(a=rand()*(maxa-mina)+mina,
-                             e=rand()*(maxe-mine)+mine,
-                             i=rand()*(maxi-mini)+mini,
-                             τ=rand()*(maxτ-minτ)+minτ,
-                             ω=rand()*(maxω-minω)+minω,
-                             Ω=rand()*(maxΩ-minΩ)+minΩ,
-                             K=rand()*(maxK-minK)+minK)
-                for t in 1:nt
-                    ΔRA, ΔDec = projected_position(O, dat.epochs[t]; polar=false)
-                    pt = dat.centers[t] + Point(-ΔRA, ΔDec)/dat.pixres[t]
-                    A += interpolate(dat.a[t], ker, pt, λ)
-                    B += interpolate(dat.b[t], ker, pt, λ)
-                end
-                dC[i] = max(0,B)^2 / A
-            end
-        end
-    else
-        Threads.@threads for nth in 1:nthreads
-            idx_min, idx_max = intervs[nth]
-            for i in idx_min:idx_max
-                O = Orbit{T}(a=rand()*(maxa-mina)+mina,
-                             e=rand()*(maxe-mine)+mine,
-                             i=rand()*(maxi-mini)+mini,
-                             τ=rand()*(maxτ-minτ)+minτ,
-                             ω=rand()*(maxω-minω)+minω,
-                             Ω=rand()*(maxΩ-minΩ)+minΩ,
-                             K=rand()*(maxK-minK)+minK)
-                for t in 1:nt
-                    ΔRA, ΔDec = projected_position(O, dat.epochs[t]; polar=false)
-                    pt = dat.centers[t] + Point(-ΔRA, ΔDec)/dat.pixres[t]
-                    a = interpolate(dat.a[t], ker, pt, λ)
-                    b = interpolate(dat.b[t], ker, pt, λ)
-                    dC[i] += max(0,b)^2 / a
-                end
-            end
-        end
-    end
-
-    q = erf.([3,5]./sqrt(2))
-    return quantile(dC,q), dC
-end
-
-function empirical_C(dat::PacomeData{T,Ndim},
-                     ker::Kernel{T},
-                     r::T;
-                     N::Int=Int(1e7),
-                     cal::Bool=false,
-                     λ::Int=1) where {T<:AbstractFloat,Ndim}
-
-    @assert 1 ≤ λ < dat.dims[end]
-    @assert r > 0
-    nt = length(dat)
-    nthreads = Threads.nthreads()
-    intervs = split_on_threads(N, nthreads)
-
-    dC = zeros(N)
-
-    if cal
-        Threads.@threads for nth in 1:nthreads
-            idx_min, idx_max = intervs[nth]
-            for i in idx_min:idx_max
-                A, B = 0, 0
-                for t in 1:nt
-                    θ = rand()*twopi(T)
-                    pt = Point{T}(r*cos(θ), r*sin(θ)) + dat.centers[t]
-                    A += interpolate(dat.a[t], ker, pt, λ)
-                    B += interpolate(dat.b[t], ker, pt, λ)
-                end
-                dC[i] = max(0,B)^2 / A
-            end
-        end
-    else
-        Threads.@threads for nth in 1:nthreads
-            idx_min, idx_max = intervs[nth]
-            for i in idx_min:idx_max
-                for t in 1:nt
-                    θ = rand()*twopi(T)
-                    pt = Point{T}(r*cos(θ), r*sin(θ)) + dat.centers[t]
-                    a = interpolate(dat.a[t], ker, pt, λ)
-                    b = interpolate(dat.b[t], ker, pt, λ)
-                    dC[i] += max(0,b)^2 / a
-                end
-            end
-        end
-    end
-
-    q = erf.([3,5]./sqrt(2))
-    return quantile(dC,q), dC
-end
-
-function empirical_C(dat::PacomeData{T,Ndim},
-                     ker::Kernel{T},
-                     rmin::T,
-                     rmax::T;
-                     Nr::Int=100,
-                     kwds...) where {T<:AbstractFloat,Ndim}
-
-   @assert 0 < rmin < rmax
-   @assert Nr > 0
-   r = LinRange(rmin,rmax,Nr)
-   return empirical_C(dat, ker, r; kwds...)
-end
-
-function empirical_C(dat::PacomeData{T,Ndim},
-                     ker::Kernel{T},
-                     r::Vector{T};
-                     kwds...) where {T<:AbstractFloat,Ndim}
-
-   @assert length(r) > 0 && minimum(r) > 0
-   sigs = Array{T,2}(undef, (length(r),2))
-   for i in 1:length(r)
-       sigs[i,:], = empirical_C(dat, ker, r[i]; kwds...)
-   end
-
-   return sigs, r
-end
-
-"""
-    orb_elem_cov_and_err(orbs, orb_ref) -> Cov, err
-
-computes the sample covariance matrix `Cov` of the 2-D array `orbs` (whose first
-axis should of size 7) and takes `orb_ref` as the mean for thecomputation of the
-covariance matrix. If `sample=true`, the sample covairance matrix is calculated.
-The square roots of the diagonal coefficients is also returned in `err`.
-
-    orb_elem_cov_and_err(orbs) -> Cov, err
-
-same as above but takes the sample mean of the whole array `orbs` for the
-computation of the covariance matrix.
-
-"""
-
-function orb_elem_cov_and_err(orbs::Array{T,2}; kwds...) where {T<:AbstractFloat}
-
-    @assert size(orbs,1) == 7
-    return orb_elem_cov_and_err(orbs, reshape(mean(orbs, dims=2),7); kwds...)
-end
-
-function orb_elem_cov_and_err(orbs::Array{T,2},
-                              orb_ref::Orbit{T};
-                              kwds...) where {T<:AbstractFloat}
-
-   return orb_elem_cov_and_err(orbs, orb2arr(orb_ref))
-end
-
-function orb_elem_cov_and_err(orbs::Array{T,2},
-                              orb_ref::Array{T,1};
-                              sample::Bool=true) where {T<:AbstractFloat}
-
-    @assert size(orbs,1) == 7
-    @assert length(orb_ref) == 7
-
-    N = size(orbs,2)
-    Cov = fill!(Array{T,2}(undef, (7,7)), 0)
-
-    for k in 1:N
-        for i in 1:7
-            for j in i:7
-                Cov[i,j] += (orbs[i,k] - orb_ref[i])*(orbs[j,k] - orb_ref[j])
-            end
-        end
-    end
-    for i in 1:7
-        for j in i:7
-            Cov[j,i] = Cov[i,j]
-        end
-    end
-    sample ? Cov ./= (N-1) : Cov ./= (N)
-
-    if all(diag(Cov) .>= 0)
-        err = sqrt.(diag(Cov))
-    else
-        err = zeros(7) .+ NaN
-    end
-
-    return err, Cov
-end
-
-function save_epochs_infos(dat::PacomeData{T,N},
-                           savePath::String) where {T<:AbstractFloat, N}
-
-    if isdir(dirname(savePath))
-        open(joinpath(savePath,"epochs_infos.txt"), "w") do io
-            for t in 1:length(dat)
-                write(io, "$(dat.dates[t])\t$(dat.iflts[t])\t$(dat.icors[t])\n")
-            end
-        end;
-        return nothing
-    else
-        return nothing
-    end
-end
-
 function build_pacome_header(dat::PacomeData{T,N},
                              ker::Kernel{T},
                              path_mmap::String,
@@ -3210,12 +2135,6 @@ function build_pacome_header(dat::PacomeData{T,N},
                     )
 
    return hdr
-end
-
-function check_in_bounds(x::Vector{T},
-                         Bs::Vector{Tuple{T,T}}) where {T<:AbstractFloat}
-   @assert length(x) == length(Bs)
-   return all([first(B) ≤ i ≤ last(B) for (i,B) in zip(x, Bs)])
 end
 
 end # module

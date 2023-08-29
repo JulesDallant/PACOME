@@ -6,8 +6,10 @@ using EasyFITS
 using TwoDimensional
 using Measurements
 using PyPlot
-# using InterpolationKernels
 
+"""
+    Spectral bands of the VLT/SPHERE-IRDIS instrument.
+"""
 IRDIS = Dict("BB_Y"=> [1.043, 1.043],
          "BB_J"=> [1.245, 1.245],
          "BB_H"=> [1.625, 1.625],
@@ -29,6 +31,9 @@ IRDIS = Dict("BB_Y"=> [1.043, 1.043],
          "NB_CntK2"=> [2.266, 2.266],
          "NB_CO"=> [2.290, 2.290])
 
+"""
+    Spectral bands of the VLT/SPHERE-IFS instrument.
+"""
 IFS = Dict("H"=>[0.957478, 0.971862, 0.986779, 1.0022, 1.0181, 1.03444,
                1.0512, 1.06834, 1.08585, 1.10369, 1.12183, 1.14025,
                1.15891, 1.17779, 1.19685, 1.21607, 1.23542, 1.25488,
@@ -141,13 +146,10 @@ end
 """
     central_pixel(A) -> pt::Point{Float64}
 
-yields the position of the central pixel in FITS Image `A`.  The central pixel
-has physical coordinates `(0,0)`.
+yields the position of the central pixel in FITS Image `A` obtained with the
+SPHERE instrument.  The central pixel has physical coordinates `(0,0)`.
 
 """
-# central_pixel(A::FitsImage) =
-#     Point((A["CRPIX1"]::Float64) - (A["CRVAL1"]::Float64)/(A["CDELT1"]::Float64),
-#           (A["CRPIX2"]::Float64) - (A["CRVAL2"]::Float64)/(A["CDELT2"]::Float64))
 central_pixel(A::Union{FitsImage,FitsHeader}) = begin
 
    if A["NAXIS1"] == A["NAXIS2"] == 1448
@@ -207,18 +209,6 @@ function pacome_head()
     return nothing
 end
 
-function pacome_head2(; version::String, date::String, giturl::String)
-    print("\n\n")
-    print(" _ __   __ _  ___  ___  _   _  ___   |\n")
-    print("| `_ \\ / _` |/ __|/ _ \\| `-' |/ __)  |  This is the PACO Multi-Epoch algorithm.\n")
-    print("| |_) | (_| | (__( (_) | |-| |  _]   |\n")
-    @printf("|  __/ \\__'_|\\___|\\___/|_| |_|\\___)  |  Version %s (%s)\n", version, date)
-    @printf("| |                                  |  Official Git: %s\n", giturl)
-    print("|_|                                  |\n")
-    print("\n\n")
-    return nothing
-end
-
 """
     formatTimeSeconds(t) -> t_str
 
@@ -258,7 +248,12 @@ function estimated_time_for_computation(nbr_orbits::Real)
     return formatTimeSeconds(t_elapsed_s)
 end
 
+"""
+    yearfraction(d)
 
+converts a date `d` in years.
+
+"""
 function yearfraction(d::Date)
     return year(d) + dayofyear(d)/daysinyear(d)
 end
@@ -267,6 +262,12 @@ function yearfraction(d::String)
     return yearfraction(Date(d))
 end
 
+"""
+    yearfraction(d)
+
+converts a date `d` expressed in years to its ISO 8061 format.
+
+"""
 function yearfraction_to_iso8061(d::AbstractFloat; format::String="short")
     y = floor(Int,d)
     days = floor(Int,(d-y)*daysinyear(d))
@@ -305,194 +306,6 @@ function save_outliers(outliers::Vector{Any}, savePath::String)
         return nothing
     end
 end
-
-function save_orbits_LaTeX(path::String, μ::Array{T,1}, σ::Array{T,1};
-                           kwds...) where {T<:AbstractFloat}
-   save_orbits_LaTeX(path, reshape(μ, (7,1)), reshape(σ, (7,1)); kwds...)
-end
-
-function save_orbits_LaTeX(path::String, μ::Array{T,2}, σ::Array{T,2};
-                           dig::Int=2, nam::Vector{String}=Vector{String}(),
-                           fontsize::String="small") where {T<:AbstractFloat}
-
-   @assert size(μ,1) == size(σ,1) == 7
-   norb = size(μ,2)
-   isempty(nam) ? nam = [string(i) for i in 1:norb] : nothing
-   @assert norb == size(σ,2) == length(nam)
-
-   fontsize in ["tiny", "scriptsize", "small", "normal", "large",
-                "Large"] ? nothing : error("Fontsize not recognized...")
-
-   param = [L"a"*" [mas]", L"e"*" [-]", L"i"*" [deg]", L"\tau"*" [-]",
-            L"\omega"*" [deg]", L"\Omega"*" [deg]", L"K"*" ["*
-            L"\text{mas}^3/\text{yr}^2"*"]", L"P"*" [yr]"]
-
-   P_val, P_err  = Vector{T}(undef, norb), Vector{T}(undef, norb)
-   for i in 1:norb
-       P = sqrt(measurement(μ[1,i],σ[1,i])^3/measurement(μ[7,i],σ[7,i]))
-       P_val[i] = P.val
-       P_err[i] = P.err
-   end
-
-   μ = round.([μ; P_val'], digits=dig)
-   σ = round.([σ; P_err'], digits=dig)
-
-   open(path, "w") do io
-       write(io, "\\begin{table}[bt]\n")
-       write(io, "    \\"*fontsize*"\n")
-       write(io, "    \\centering\n")
-       write(io, "    \\begin{tabular}{c|"*"c"^norb*"}\n")
-
-       write(io, "    \\hline")
-       write(io, "    \\textbf{Param.}")
-       for i in 1:norb
-           write(io, " & \\textbf{Planet \\textit{"*nam[i]*"}}")
-       end
-       write(io, " \\\\ \\hline\n")
-
-       for i in 1:8
-           write(io, "    " * param[i])
-           for j in 1:norb
-               write(io, " & \$ "*string(μ[i,j])*" \\pm "*string(σ[i,j])*" \$")
-           end
-           write(io, " \\\\ \n")
-       end
-       write(io, "    \\hline")
-
-       write(io, "    \\end{tabular}\n")
-       write(io, "    \\caption{}\n")
-       write(io, "    \\label{tab:}\n")
-       write(io, "\\end{table}\n")
-   end
-end
-
-function save_orbits_LaTeX(path::String, μ::Array{T,2}, σ::Array{T,2},
-                           C::Vector{T}; dig::Int=2,
-                           nam::Vector{String}=Vector{String}(),
-                           fontsize::String="small",
-                           cal::Bool=false) where {T<:AbstractFloat}
-
-   @assert size(μ,1) == size(σ,1) == 7
-   norb = size(μ,2)
-   isempty(nam) ? nam = [string(i) for i in 1:norb] : nothing
-   @assert norb == size(σ,2) == length(nam) == length(C)
-
-   fontsize in ["tiny", "scriptsize", "small", "normalsize", "large",
-                "Large"] ? nothing : error("Fontsize not recognized...")
-
-   if cal
-       Cnam = L"\mathcal{C}^{\text{cal}}"
-   else
-       Cnam = L"\mathcal{C}^{\text{uncal}}"
-   end
-
-   param = [L"a"*" [mas]", L"e"*" [-]", L"i"*" [deg]", L"\tau"*" [-]",
-            L"\omega"*" [deg]", L"\Omega"*" [deg]", L"K"*" ["*
-            L"\text{mas}^3/\text{yr}^2"*"]", L"P"*" [yr]"]
-
-   P_val, P_err  = Vector{T}(undef, norb), Vector{T}(undef, norb)
-   for i in 1:norb
-       P = sqrt(measurement(μ[1,i],σ[1,i])^3/measurement(μ[7,i],σ[7,i]))
-       P_val[i] = P.val
-       P_err[i] = P.err
-   end
-
-   μ = round.([μ; P_val'], digits=dig)
-   σ = round.([σ; P_err'], digits=dig)
-   C = round.(C, digits=dig)
-
-   open(path, "w") do io
-       write(io, "\\begin{table}[bt]\n")
-       write(io, "    \\"*fontsize*"\n")
-       write(io, "    \\centering\n")
-       write(io, "    \\begin{tabular}{c|"*"c"^norb*"}\n")
-
-       write(io, "    \\hline")
-       write(io, "    \\textbf{Param.}")
-       for i in 1:norb
-           write(io, " & \\textbf{Planet \\textit{"*nam[i]*"}}")
-       end
-       write(io, " \\\\ \\hline\n")
-
-       for i in 1:8
-           write(io, "    " * param[i])
-           for j in 1:norb
-               write(io, " & \$ "*string(μ[i,j])*" \\pm "*string(σ[i,j])*" \$")
-           end
-           write(io, " \\\\ \n")
-       end
-       write(io, "    \\hline\n")
-
-       write(io, "    "*Cnam)
-       for j in 1:norb
-           write(io, " & "*string(C[j]))
-       end
-       write(io, "\\\\ \n    \\hline\n")
-       write(io, "    \\end{tabular}\n")
-       write(io, "    \\caption{}\n")
-       write(io, "    \\label{tab:}\n")
-       write(io, "\\end{table}\n")
-   end
-end
-
-function print_orbits_LaTeX(μ0::Array{T,2}, σ0::Array{T,2},
-                           C::Vector{T}, Clim::Vector{T};
-                           dig::Int=2, dof::String="") where {T<:AbstractFloat}
-
-   μ = deepcopy(μ0)
-   σ = deepcopy(σ0)
-   @assert size(μ,1) == size(σ,1) == 7
-   norb = size(μ,2)
-   @assert norb == size(σ,2) == length(C) == length(Clim)
-   # param = [L"a"*" [mas]", L"e"*" [-]", L"i"*" [deg]", L"\tau"*" [-]",
-   #          L"\omega"*" [deg]", L"\Omega"*" [deg]", L"K"*" ["*
-   #          L"\text{mas}^3/\text{yr}^2"*"]", L"P"*" [yr]"]
-   pow = floor(Int,log10(maximum(μ[end,:])))
-
-   elem = ["\$a\$", "\$e\$", "\$i\$", "\$\\tau\$",
-            "\$\\omega\$", "\$\\Omega\$", "\$K \\, (\\times 10^$pow)\$", "\$ P \$"]
-   units = ["mas", "-", "deg", "-", "deg", "deg", "mas\$^3\$/yr\$^2\$", "yr"]
-
-   P_val, P_err  = Vector{T}(undef, norb), Vector{T}(undef, norb)
-   for i in 1:norb
-       P = sqrt(measurement(μ[1,i],σ[1,i])^3/measurement(μ[7,i],σ[7,i]))
-       P_val[i] = P.val
-       P_err[i] = P.err
-   end
-
-   μ[end,:], σ[end,:] = μ[end,:]/10^pow, σ[end,:]/10^pow
-
-   μ = round.([μ; P_val'], digits=dig)
-   σ = round.([σ; P_err'], digits=dig)
-   C = round.(C, digits=dig)
-   SNR = round.(sqrt.(C), digits=dig)
-   Clim = round.(Clim, digits=dig)
-
-   for i in 1:8
-       print("    $(elem[i]) & $(units[i]) ")
-       for j in 1:norb
-           print(" & \$ "*string(μ[i,j])*" \\pm "*string(σ[i,j])*" \$")
-       end
-       print(" \\\\ \n")
-   end
-   print("    \\midrule\n")
-
-
-   print("    \\multicolumn{2}{c||}{\\textbf{Multi-epoch} \$\\SNR\$}")
-   for j in 1:norb
-       print(" & "*string(SNR[j]))
-   end
-   print("\\\\\n    \\multicolumn{2}{c||}{\\textbf{Criterion} \$ \\CostFunc \$} ")
-   for j in 1:norb
-       print(" & "*string(C[j]))
-   end
-   print(" \\\\\n    \\multicolumn{2}{c||}{\\textbf{Threshold} \$ \\widehat{\\mathcal{Q}}_{$dof}(1-10^{-6}) \$} ")
-   for j in 1:norb
-       print(" & "*string(Clim[j]))
-   end
-   print(" \\\\\n")
-end
-
 
 """
     split_on_threads(nop, nthreads) -> intervs

@@ -8,6 +8,7 @@ module Orbits
 using OptimPackNextGen: fzero
 using Parameters
 using Measurements
+using Roots
 
 """
     twopi(T = Float64) -> 2π :: T
@@ -101,35 +102,6 @@ Base.convert(::Type{Orbit{T}}, A::Orbit) where {T} =
              periapsis_epoch(A), periapsis_argument(A),
              ascending_node_longitude(A), kepler_constant(A), period(A))
 
-# Base.show(io::IO, A::Orbit{T}) where {T} = begin
-#     x = (("a", string(semimajor_axis(A)), "semi-major axis"),
-#          ("e", string(eccentricity(A)), "eccentricity"),
-#          ("i", string(inclination(A)), "inclination (deg)"),
-#          ("τ", string(periapsis_epoch(A)), "epoch of periapsis fraction"),
-#          ("ω", string(periapsis_argument(A)), "argument of periapsis (deg)"),
-#          ("Ω", string(ascending_node_longitude(A)),
-#           "longitude of ascending node (deg)"),
-#          ("K", string(kepler_constant(A)), "kepler's constant ([a]^3/yr^2)"),
-#          ("P", string(period(P)), "period (yr)"))
-#     hdr = "Orbit{$T}("
-#     spc = repeat(" ", length(hdr))
-#     maxlen = 0
-#     for (lab, val, com) in x
-#         maxlen = max(maxlen, length(lab) + length(val))
-#     end
-#     n = length(x)
-#     for i in 1:n
-#         lab, val, com = x[i]
-#         cnt = 1 + maxlen - length(lab) - length(val)
-#         print(io, (i == 1 ? hdr : spc), lab, " =", repeat(" ", cnt), val)
-#         if i < n
-#             println(io, ", # ", com)
-#         else
-#             print(io, ") # ", com)
-#         end
-#     end
-# end
-
 """
     Grid(a, e, i, τ, ω, Ω, K)
 
@@ -153,21 +125,21 @@ The .txt file must be formatted following the example given in the documentation
 
 """
 struct Grid{T<:AbstractFloat}
-   a::AbstractArray{T,1}  # semi-major axis (arbitrary)
-   e::AbstractArray{T,1}  # eccentricity
-   i::AbstractArray{T,1}  # inclination of orbit (deg)
-   τ::AbstractArray{T,1} # epoch of periapsis fraction
-   ω::AbstractArray{T,1}  # longitude of periapsis (deg)
-   Ω::AbstractArray{T,1}  # position angle of ascending node (deg)
-   K::AbstractArray{T,1}  # period ([a]^3/yr^2)
+   a::AbstractVector{T}  # semi-major axis (arbitrary)
+   e::AbstractVector{T}  # eccentricity
+   i::AbstractVector{T}  # inclination of orbit (deg)
+   τ::AbstractVector{T} # epoch of periapsis fraction
+   ω::AbstractVector{T}  # longitude of periapsis (deg)
+   Ω::AbstractVector{T}  # position angle of ascending node (deg)
+   K::AbstractVector{T}  # period ([a]^3/yr^2)
    norbits::Int           # number of orbits to cover
 end
 
-function Grid{T}(; a::AbstractArray{T,1},
-                   e::AbstractArray{T,1}, i::AbstractArray{T,1},
-                   τ::AbstractArray{T,1}, ω::AbstractArray{T,1},
-                   Ω::AbstractArray{T,1},
-                   K::AbstractArray{T,1}) where {T<:AbstractFloat}
+function Grid{T}(; a::AbstractVector{T},
+                   e::AbstractVector{T}, i::AbstractVector{T},
+                   τ::AbstractVector{T}, ω::AbstractVector{T},
+                   Ω::AbstractVector{T},
+                   K::AbstractVector{T}) where {T<:AbstractFloat}
     return Grid{T}(a, e, i, τ, ω, Ω, K, length(a)*length(e)*length(i)*
                    length(τ)*length(ω)*length(Ω)*length(K))
 end
@@ -269,7 +241,7 @@ years):
 """
 eccentric_anomaly(eq::KeplerEquation; kwds...) =
     #eccentric_anomaly_cordic(eq; kwds...)
-    eccentric_anomaly_brent(eq; kwds...)
+    eccentric_anomaly_brent_Roots(eq; kwds...)
 
 eccentric_anomaly(A::Orbit, t::Real; kwds...) =
     eccentric_anomaly(eccentricity(A), mean_anomaly(A, t); kwds...)
@@ -282,7 +254,7 @@ end
 eccentric_anomaly(e::T, M::T; kwds...) where {T<:AbstractFloat} =
     eccentric_anomaly(KeplerEquation(e, M); kwds...)
 
-function eccentric_anomaly_brent(f::KeplerEquation{T};
+function eccentric_anomaly_brent_Eric(f::KeplerEquation{T};
                                  kwds...) where {T}
     # A crude bracketing of the solution of Kepler's equation is given by:
     # E ∈ [M - e, M + e].  For elliptic orbits, the eccentricity is such
@@ -304,6 +276,26 @@ function eccentric_anomaly_brent(f::KeplerEquation{T};
     E, = fzero(T, f, a, fa, b, fb; kwds...)
     return E
 end
+
+function eccentric_anomaly_brent_Roots(f::KeplerEquation{T};
+                                       kwds...) where {T}
+    # A crude bracketing of the solution of Kepler's equation is given by:
+    # E ∈ [M - e, M + e].  For elliptic orbits, the eccentricity is such
+    # that 0 ≤ e < 1 and f(E) = E - M - e*sin(E) is a strictly
+    # non-decreasing function as f'(E) = 1 - e*cos(E) ≥ 1 - e > 0.  A
+    # narrower interval can be determined in that case which makes the
+    # search a bit faster.
+    e = eccentricity(f)
+    M = mean_anomaly(f)
+    0 ≤ e < 1 || error("not an elliptic orbit")
+    a = M # initial guess
+    fa = f(a)
+    fa == 0 && return a
+    b = (fa > 0 ? a - e : a + e)
+    E = find_zero(f, (a,b), Roots.Brent(); kwds...)
+    return E
+end
+
 
 function eccentric_anomaly_cordic(eq::KeplerEquation{T};
                                   kwds...) where {T}
@@ -429,11 +421,6 @@ function projected_position(A::Orbit{T}, t::T;
 
     # True anomaly `ν` (in radians).
     ν = 2*atan(sqrt((1 + e)/(1 - e))*tan(E/2))
-
-    # ∂X_∂r = sin(Ω)*cos(ν+ω) + cos(Ω)*sin(ν+ω)*cos(i)
-    # ∂Y_∂r = cos(Ω)*cos(ν+ω) - sin(Ω)*sin(ν+ω)*cos(i)
-    # ∂r_∂a = 1 - e*cos(E)
-    # ∂XY_∂a = [∂X_∂r*∂r_∂a, ∂Y_∂r*∂r_∂a]
 
     # Position angle `θ` (in radians) and projected separation `ρ`.
     sinνpω, cosνpω = sincos(ν + ω)
