@@ -11,4 +11,4 @@ Multi-epoch combination of direct imaging observations for exoplanet detection b
 ## References
 
 - [*"Optimal multi-epoch combination of direct imaging observations for improved exoplanet detection"*](https://www.spiedigitallibrary.org/conference-proceedings-of-spie/12185/1218537/Optimal-multi-epoch-combination-of-direct-imaging-observations-for-improved/10.1117/12.2630053.short?SSO=1), Dallant J., Langlois M., Thiébaut E., Flasseur O., SPIE, 2022
-- *"PACOME: Optimal multi-epoch combination of direct imaging observations for joint exoplanet detection and orbit estimation"*, Dallant J., Langlois M., Thiébaut E., Flasseur O., A&A, 2023(*accepted*)
+- *"PACOME: Optimal multi-epoch combination of direct imaging observations for joint exoplanet detection and orbit estimation"*, Dallant J., Langlois M., Thiébaut E., Flasseur O., A&A, 2023 (*accepted*)
